@@ -2,6 +2,8 @@
 
 Built for the **Nebius x NVIDIA Global AI Hackathon** (Best Apps and Agents track).
 
+**Live demo:** https://safe-route-analyzer-iz0j.onrender.com (free tier — the first request after idle can take ~30 s to wake up)
+
 A low-scale, evidence-aware multi-route comparison demo for Bengaluru-style trips. TomTom supplies geocoding, route geometry, travel-time summaries, along-route places and incidents. OpenStreetMap street-lamp nodes provide a mapped-lighting signal. NVIDIA Nemotron models, served through **Nebius Token Factory**, turn free-text preferences into ranking adjustments and landmark searches, and narrate the comparison between routes; all provider failures degrade gracefully (the app still returns routes and metrics if an LLM call fails or times out).
 
 **This is not crime data, a safety service, or a safety guarantee.** A mapped OpenStreetMap lamp does not confirm that it works, and missing lamp data does not establish darkness.
