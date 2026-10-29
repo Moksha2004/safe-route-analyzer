@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: safe-route-analyzer
+    runtime: docker
+    plan: free
+    envVars:
+      - key: TOMTOM_API_KEY
+        sync: false
+      - key: NEBIUS_API_KEY
+        sync: false
+      - key: NEBIUS_BASE_URL
+        value: https://api.tokenfactory.nebius.com/v1
+      - key: OVERPASS_URL
+        value: https://overpass-api.de/api/interpreter
+      - key: VITE_TOMTOM_API_KEY
+        sync: false
+      - key: CORS_ORIGINS
+        value: http://localhost:5173
+      - key: EXPLAINER_ENABLED
+        value: "true"
