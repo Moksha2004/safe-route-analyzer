@@ -106,6 +106,34 @@ def test_route_engine_extracts_shop_hospital_police_and_residential_activity():
     asyncio.run(run())
 
 
+def test_route_engine_handles_unknown_shop_and_hospital_hours_without_crashing():
+    class UnknownHoursTomTom(FakeTomTom):
+        async def along_route_pois(self, points):
+            return [
+                {"id": "shop", "_safeRouteCategory": "shops", "poi": {"name": "Unknown Hours Shop"}, "position": {"lat": 12.91, "lon": 77.61}},
+                {"id": "hospital", "_safeRouteCategory": "hospitals", "poi": {"name": "Unknown Hours Hospital"}, "position": {"lat": 12.91, "lon": 77.61}},
+            ]
+
+    async def run():
+        request = AnalyzeRequest(
+            start=Coordinate(lat=12.90, lon=77.60),
+            destination=Coordinate(lat=12.92, lon=77.62),
+            mode="car",
+            maxRoutes=1,
+            departureTime="2026-10-25T20:00:00+05:30",
+        )
+        result = await RouteEngine(UnknownHoursTomTom(), FakeOverpass(), None).analyze(request)
+        route = result["routes"][0]
+        assert route["activitySummary"]["shops"]["unknown"] == 1
+        assert route["activitySummary"]["hospitals"]["unknown"] == 1
+        assert "shopOpeningHours" in route["missingSignals"]
+        assert "hospitalOpeningHours" in route["missingSignals"]
+        assert "openShopsAtNight" not in route["nightActivityBreakdown"]["components"]
+        assert "openHospitalsAtNight" not in route["nightActivityBreakdown"]["components"]
+
+    asyncio.run(run())
+
+
 def test_route_engine_generates_longer_route_through_requested_lake():
     class LakeDetourTomTom(FakeTomTom):
         async def routes(self, start, destination, mode, alternatives, departure=None):
