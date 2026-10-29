@@ -1,0 +1,1 @@
+{"name":"safe-route-web","private":true,"version":"0.1.0","type":"module","scripts":{"dev":"vite","build":"tsc -b && vite build","preview":"vite preview"},"dependencies":{"maplibre-gl":"^6.15.0"},"devDependencies":{"@types/geojson":"^7946.0.16","typescript":"~5.8.3","vite":"^6.3.5"}}
