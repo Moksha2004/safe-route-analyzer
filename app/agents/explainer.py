@@ -13,7 +13,10 @@ SYSTEM = (
     "Write one or two plain-language sentences per route (under 45 words), in the order given, explaining why it ranks where it does "
     "compared with the other routes: cite its night activity score out of 100, concrete counts (police stations, open shops, hospitals, "
     "mapped street lamps per km, nearby homes) and travel time, and connect them to the traveller's priorities when given. "
-    "Talk like a helpful local, not a data report: never mention field names, weights, weighted parts, decimals beyond one place or "
+    "streetLightingScore is relative to the best-lit route in this comparison, not an absolute rating, and OpenStreetMap lamp mapping "
+    "is sparse: describe lighting with lampsPerKm and comparisons (for example 'more mapped lamps than the other routes'), never as "
+    "excellent or well lit unless lampsPerKm is above 15. "
+    "Talk like a helpful local, not a data report:never mention field names, weights, weighted parts, decimals beyond one place or "
     "words like 'component', 'signal' or 'search'. Say a fact is unknown or unmapped rather than bad when data is missing. "
     "Do not invent places, numbers or crime information. Never claim a route is safe, safer, guaranteed safe or crime-free. "
     'Return JSON {"explanations": [string, ...]} with exactly one string per route.'

@@ -9,6 +9,11 @@ def test_lighting_score_is_relative_to_alternatives():
     assert density == [(0.0, 0.0), (4.0, 50.0), (8.0, 100.0)]
 
 
+def test_similar_lamp_densities_get_similar_lighting_scores():
+    density = normalize_lamp_density([16, 13], [10_000, 10_000])
+    assert density == [(1.6, 100.0), (1.3, 81.2)]
+
+
 def test_empty_lighting_is_zero():
     assert normalize_lamp_density([0, 0], [1000, 2000]) == [(0.0, 0.0), (0.0, 0.0)]
 
