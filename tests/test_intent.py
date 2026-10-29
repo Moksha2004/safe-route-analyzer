@@ -53,6 +53,14 @@ def test_multipliers_change_day_ranking():
     assert rank_routes(routes(), is_night=False, mode="car", multipliers={"light": 0.5, "police": 1.5})[0]["routeId"] == "police"
 
 
+def test_one_minute_slower_route_with_more_night_activity_ranks_first():
+    routes = [
+        {"routeId": "faster", "durationSeconds": 900, "nightActivityScore": 43.4, "streetLightingScore": 0, "activitySummary": {}},
+        {"routeId": "livelier", "durationSeconds": 960, "nightActivityScore": 45.5, "streetLightingScore": 0, "activitySummary": {}},
+    ]
+    assert rank_routes(routes, is_night=True, mode="car")[0]["routeId"] == "livelier"
+
+
 @pytest.mark.parametrize(("lon", "expected"), [(77.6100, True), (77.6105, False)])
 def test_corridor_check_uses_segments_not_only_sample_points(lon, expected):
     # Samples are 1.1 km apart; a POI on the road midway is ~550 m from either sample but 0 m from the segment.

@@ -2,16 +2,29 @@
 
 Built for the **Nebius x NVIDIA Global AI Hackathon** (Best Apps and Agents track).
 
-A low-scale, evidence-aware multi-route comparison demo for Bengaluru-style trips. TomTom supplies geocoding, route geometry, travel-time summaries, along-route places and incidents. OpenStreetMap street-lamp nodes provide a mapped-lighting signal. NVIDIA Nemotron models, served through **Nebius Token Factory**, parse free-text preferences into scoring weights and narrate the comparison between routes; all provider failures degrade gracefully (the app still returns routes and metrics if an LLM call fails or times out).
+A low-scale, evidence-aware multi-route comparison demo for Bengaluru-style trips. TomTom supplies geocoding, route geometry, travel-time summaries, along-route places and incidents. OpenStreetMap street-lamp nodes provide a mapped-lighting signal. NVIDIA Nemotron models, served through **Nebius Token Factory**, turn free-text preferences into ranking adjustments and landmark searches, and narrate the comparison between routes; all provider failures degrade gracefully (the app still returns routes and metrics if an LLM call fails or times out).
 
 **This is not crime data, a safety service, or a safety guarantee.** A mapped OpenStreetMap lamp does not confirm that it works, and missing lamp data does not establish darkness.
 
 ## Nebius / NVIDIA usage
 
-- **Provider**: [Nebius Token Factory](https://tokenfactory.nebius.com) (OpenAI-compatible `chat/completions`), see [`app/clients/nebius.py`](app/clients/nebius.py).
-- **Intent parsing** — `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B` turns free-text preferences (e.g. "prefer open shops, hospitals, police and residential stretches") into bounded scoring weights. See [`app/agents/agent2a_intent.py`](app/agents/agent2a_intent.py). Called with a 200ms budget; falls back to mode defaults on timeout.
-- **Route explainer** — `nvidia/nemotron-3-super-120b-a12b` compares routes using only the structured metrics the backend already computed (never raw text), and is filtered for banned "guaranteed safe" phrasing. See [`app/agents/explainer.py`](app/agents/explainer.py).
-- The LLMs never choose geometry or touch TomTom/OSM data directly — they only parse intent and narrate numbers the deterministic scoring pipeline already produced.
+```
+"walking home late, police and well-lit streets matter, happy to pass a lake"
+        │
+        ▼  Nemotron-3-Nano (Token Factory)          runs in parallel with geocoding/routing
+{multipliers: {police: 1.5, light: 1.5}, priorities: [police, light], landmarks: ["lake"]}
+        │
+        ▼  deterministic pipeline (TomTom + OSM)      landmarks → along-route searches / via-routes
+routes + Night Activity Score + breakdown            multipliers → bounded rank-weight rescaling
+        │
+        ▼  Nemotron-3-Super (Token Factory)
+one grounded explanation per route, citing only the metrics above
+```
+
+- **Provider**: [Nebius Token Factory](https://tokenfactory.nebius.com) (OpenAI-compatible `chat/completions`, JSON mode), see [`app/clients/nebius.py`](app/clients/nebius.py). Nemotron 3 reasons by default; we send `chat_template_kwargs: {"enable_thinking": false}` because for these short structured tasks reasoning consumed the whole token budget and returned no content (~37 s → ~2.7 s with it off).
+- **Intent agent** — `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B` ([`app/agents/agent2a_intent.py`](app/agents/agent2a_intent.py)) maps free text to 0.5–1.5× multipliers on nine named ranking factors (police, lighting, open shops, hospitals, residential, night activity, delay, closures, duration) plus up to three landmark search terms. Output is validated and clamped server-side; unknown factors are dropped. Falls back to default weights and keyword extraction if the call fails.
+- **Route explainer** — `nvidia/nemotron-3-super-120b-a12b` ([`app/agents/explainer.py`](app/agents/explainer.py)) receives only the structured metrics the backend computed plus the parsed priorities, writes one explanation per route, and is post-filtered for "guaranteed safe"-style phrasing.
+- The LLMs never choose geometry or touch TomTom/OSM data directly; the UI labels which model produced what.
 
 ## Requirements
 
@@ -89,16 +102,16 @@ Start and destination can each be a place string or `{ "lat": ..., "lon": ... }`
 - The service does not request or infer crime data.
 - Unknown business hours receive no positive credit; unknown is not considered closed.
 - Route requests send the selected departure date/time to TomTom (`departAt`) for time-dependent routing. TomTom's documented traffic support includes live/current traffic and typical weekday/time speeds; exact future incidents should not be treated as known.
-- Overpass is a shared community service. Requests are bounded to a combined route bounding box, identify this client, and degrade without failing route analysis. Configure `OVERPASS_URL` if using an approved alternative endpoint.
+- Street lamps inside the Bengaluru metro area come from a bundled OpenStreetMap snapshot ([`app/data/bengaluru_street_lamps.json`](app/data/bengaluru_street_lamps.json), © OpenStreetMap contributors, [ODbL](https://opendatacommons.org/licenses/odbl/)). The public Overpass API took 30+ seconds or returned 502/504 for a single route corridor, so live queries are only used outside that area. Configure `OVERPASS_URL` if using an approved alternative endpoint.
 - Street-lamp scores are relative across returned alternatives. OSM tagging is incomplete; the score is not a measurement of functioning lights.
-- TomTom POIs and category coverage can be incomplete. Residential coverage is a category-evidence estimate, not a density claim.
-- Flow sampling and route-specific residential reverse-geocoding are not enabled in this initial scaffold; unavailable signals are surfaced rather than synthesized.
-- This demo uses in-process provider clients and no persistent cache, queue, database, or rate limiter.
+- Unknown Night Activity signals count as neutral (50%), not as good or bad, and each route reports what share of the score is backed by evidence, so a single strong signal cannot produce a perfect score.
+- TomTom POIs and category coverage can be incomplete. Residential coverage is a category-evidence estimate, not a density claim. TomTom Search calls are throttled to ~4 requests/second with retry on HTTP 429.
+- Flow sampling and route-specific residential reverse-geocoding are not enabled; unavailable signals are surfaced rather than synthesized.
+- This demo uses in-process provider clients and no persistent cache, queue or database.
 
 ## Checks
 
-```powershell
+```bash
 pytest
-cd web
-npm run build
+cd web && npm run build
 ```

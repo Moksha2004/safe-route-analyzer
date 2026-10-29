@@ -10,15 +10,17 @@ MODEL = "nvidia/nemotron-3-super-120b-a12b"
 TIMEOUT_SECONDS = 25.0
 SYSTEM = (
     "You compare alternative routes for a traveller using only the structured metrics supplied. "
-    "Write one or two sentences per route, in the order given, explaining why it ranks where it does. "
-    "Cite the night activity score and the breakdown components that drive it, and connect them to the traveller's priorities when given. "
-    "Mention missing signals as unknown, never as bad. Do not invent places, numbers or crime information. "
-    "Never claim a route is safe, safer, guaranteed safe or crime-free. "
+    "Write one or two plain-language sentences per route (under 45 words), in the order given, explaining why it ranks where it does "
+    "compared with the other routes: cite its night activity score out of 100, concrete counts (police stations, open shops, hospitals, "
+    "mapped street lamps per km, nearby homes) and travel time, and connect them to the traveller's priorities when given. "
+    "Talk like a helpful local, not a data report: never mention field names, weights, weighted parts, decimals beyond one place or "
+    "words like 'component', 'signal' or 'search'. Say a fact is unknown or unmapped rather than bad when data is missing. "
+    "Do not invent places, numbers or crime information. Never claim a route is safe, safer, guaranteed safe or crime-free. "
     'Return JSON {"explanations": [string, ...]} with exactly one string per route.'
 )
 _ROUTE_FIELDS = (
-    "rank", "nightActivityScore", "streetLightingScore", "nightActivityBreakdown", "durationSeconds",
-    "distanceMeters", "trafficDelaySeconds", "activitySummary", "policeCount", "preferenceScore", "preferenceMatches",
+    "rank", "nightActivityScore", "streetLightingScore", "lampsPerKm", "nightActivityBreakdown", "durationSeconds",
+    "distanceMeters", "trafficDelaySeconds", "activitySummary", "policeCount", "residentialCoveragePercent", "preferenceMatches",
 )
 _BANNED = re.compile(r"\b(guaranteed\s+safe|completely\s+safe|crime[- ]free|100%\s+safe)\b", re.IGNORECASE)
 

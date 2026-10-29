@@ -4,7 +4,7 @@ import './style.css';
 import { analyze, type ParsedPreferences, type RouteResult } from './api/analyze';
 import { searchPlaces, type PlaceSuggestion } from './api/places';
 import { DEFAULT_MAX_ROUTES, MAX_ROUTES, MIN_SEARCH_LENGTH, SEARCH_DEBOUNCE_MS } from './config';
-import { createMap } from './map/createMap';
+import { createMap, whenMapReady } from './map/createMap';
 import { clearRemainingRoute, drawRoutes, showRemainingRoute, toggleLamps } from './map/layers';
 
 const root = document.querySelector<HTMLDivElement>('#app');
@@ -51,6 +51,13 @@ let activeRoutes: RouteResult[] = [];
 let activeParsed: ParsedPreferences = {};
 let selectedIndex = 0;
 let lampsVisible = false;
+
+function showRoutesOnMap(routes: RouteResult[], selected: number): void {
+  whenMapReady(map, () => {
+    drawRoutes(map, routes, selected);
+    toggleLamps(map, lampsVisible);
+  });
+}
 let pinMode = false;
 let pinTarget: 'start' | 'destination' | null = null;
 let startPin: { lat: number; lon: number } | null = null;
@@ -266,7 +273,7 @@ form.addEventListener('submit', async (event) => {
     selectedIndex = 0;
     if (!activeRoutes.length) throw new Error('No routes were returned. Try another destination.');
     renderResults(activeRoutes, result.limitations, result.parsedPreferences);
-    drawRoutes(map, activeRoutes, selectedIndex);
+    showRoutesOnMap(activeRoutes, selectedIndex);
   } catch (error) {
     status.textContent = error instanceof Error ? error.message : 'Unable to analyze this journey.';
   } finally {
@@ -286,6 +293,22 @@ const FACTOR_LABELS: Record<string, string> = {
   closure: 'Avoid closures',
   duration: 'Shorter trip',
 };
+
+const MISSING_LABELS: Record<string, string> = {
+  police: 'police stations',
+  shops: 'shops',
+  hospitals: 'hospitals',
+  residential: 'nearby homes',
+  streetLighting: 'mapped street lights',
+  nightTrafficActivity: 'night traffic',
+  shopOpeningHours: 'most shop hours',
+  hospitalOpeningHours: 'most hospital hours',
+};
+
+function describeMissing(signals: string[]): string {
+  const labels = new Set(signals.map((signal) => MISSING_LABELS[signal] ?? (signal.endsWith('Search') ? 'some place searches (provider busy)' : signal)));
+  return [...labels].join(', ');
+}
 
 function renderParsedPreferences(parsed: ParsedPreferences): string {
   const adjusted = Object.entries(parsed.multipliers ?? {}).filter(([, value]) => value !== 1).sort(([, a], [, b]) => b - a);
@@ -310,7 +333,7 @@ function renderResults(routes: RouteResult[], limitations: string[], parsed: Par
       <div class="breakdown"><span>ACTIVITY SIGNALS</span><div class="signal-chips"><span>Police ${formatSignal('police', String(Math.round(components.policePresence ?? route.policeCount * 50)))}</span><span>Shops ${missing.has('shops') ? '—' : `${route.activitySummary.shops?.open ?? 0} open${route.activitySummary.shops?.unknown ? ` · ${route.activitySummary.shops.unknown} unknown` : ''}`}</span><span>Hospitals ${missing.has('hospitals') ? '—' : `${route.activitySummary.hospitals?.open ?? 0} open${route.activitySummary.hospitals?.unknown ? ` · ${route.activitySummary.hospitals.unknown} unknown` : ''}`}</span><span>Homes ${formatSignal('residential', `${Math.round(route.residentialCoveragePercent)}%`)}</span></div></div>
       ${route.preferenceMatches.length ? `<div class="preference-matches"><span>YOUR PREFERENCES</span><div class="signal-chips">${route.preferenceMatches.map((match) => `<span>✓ ${escapeHtml(match)}</span>`).join('')}</div></div>` : ''}
       ${route.explanation ? `<p class="route-explanation"><span class="ai-label">NEMOTRON SUPER</span>${escapeHtml(route.explanation)}</p>` : ''}
-      ${route.missingSignals.length ? `<p class="missing-note">Limited data: ${escapeHtml(route.missingSignals.join(', '))}</p>` : ''}
+      ${route.missingSignals.length ? `<p class="missing-note">Not known for this route: ${escapeHtml(describeMissing(route.missingSignals))}</p>` : ''}
     </button>`;
   }).join('');
   const selectedRoute = routes[selectedIndex];
@@ -320,7 +343,7 @@ function renderResults(routes: RouteResult[], limitations: string[], parsed: Par
     if (navigationWatchId !== null) stopNavigation();
     selectedIndex = Number(card.dataset.routeIndex ?? 0);
     renderResults(routes, limitations, parsed);
-    drawRoutes(map, routes, selectedIndex);
+    showRoutesOnMap(routes, selectedIndex);
   }));
   panel.querySelector<HTMLButtonElement>('#navigation-button')?.addEventListener('click', () => {
     if (navigationWatchId !== null) stopNavigation();

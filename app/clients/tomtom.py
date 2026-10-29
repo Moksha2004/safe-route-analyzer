@@ -41,6 +41,8 @@ class TomTomClient:
     # TomTom's Search API answers bursts above ~5 requests/second with HTTP 429.
     SEARCH_MIN_INTERVAL_SECONDS = 0.25
     SEARCH_RETRIES = 3
+    # Healthy searches return in under a second; a few along-route queries hang for 12 s+ every time.
+    SEARCH_TIMEOUT_SECONDS = 6.0
 
     def __init__(self, api_key: str, client: httpx.AsyncClient | None = None) -> None:
         self.api_key = api_key
@@ -61,7 +63,14 @@ class TomTomClient:
                 if wait > 0:
                     await asyncio.sleep(wait)
                 self._next_search_at = loop.time() + self.SEARCH_MIN_INTERVAL_SECONDS
-            response = await self.client.request(method, url, **kwargs)
+            try:
+                response = await self.client.request(method, url, timeout=self.SEARCH_TIMEOUT_SECONDS, **kwargs)
+            except (httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError):
+                # Retry dropped connections only; TomTom's slow searches time out repeatably, so timeouts are not retried.
+                if attempt == self.SEARCH_RETRIES:
+                    raise
+                await asyncio.sleep(0.5 * 2 ** attempt)
+                continue
             if response.status_code != 429 or attempt == self.SEARCH_RETRIES:
                 return response
             await asyncio.sleep(0.5 * 2 ** attempt)
@@ -155,7 +164,10 @@ class TomTomClient:
         origin = f"{start['lat']},{start['lon']}"
         target = f"{destination['lat']},{destination['lon']}"
         url = f"{self.BASE_URL}/routing/1/calculateRoute/{origin}:{target}/json"
-        params: dict[str, Any] = {"key": self.api_key, "travelMode": mode, "maxAlternatives": alternatives, "alternativeType": "anyRoute", "traffic": "true", "sectionType": "traffic", "routeType": "fastest", "instructionsType": "tagged", "language": "en-GB", "computeTravelTimeFor": "all"}
+        params: dict[str, Any] = {"key": self.api_key, "travelMode": mode, "maxAlternatives": alternatives, "traffic": "true", "sectionType": "traffic", "routeType": "fastest", "instructionsType": "tagged", "language": "en-GB", "computeTravelTimeFor": "all"}
+        if alternatives > 0:
+            # TomTom returns 400 BAD_INPUT if alternativeType is sent with maxAlternatives=0.
+            params["alternativeType"] = "anyRoute"
         if departure is not None:
             params["departAt"] = departure.isoformat()
         response = await self.client.get(url, params=params)
@@ -268,6 +280,6 @@ class TomTomClient:
 
     async def incidents(self, bbox: tuple[float, float, float, float]) -> list[dict[str, Any]]:
         south, west, north, east = bbox
-        response = await self.client.get(f"{self.BASE_URL}/traffic/services/5/incidentDetails", params={"key": self.api_key, "bbox": f"{west},{south},{east},{north}", "fields": "{incidents{type,geometry{type,coordinates},properties{iconCategory,magnitudeOfDelay,events,from,to,roadNumbers}}}", "language": "en-GB", "categoryFilter": "0,1,2,3,4,5,6,7,8,9,10,11,14"})
+        response = await self.client.get(f"{self.BASE_URL}/traffic/services/5/incidentDetails", params={"key": self.api_key, "bbox": f"{west},{south},{east},{north}", "fields": "{incidents{type,geometry{type,coordinates},properties{iconCategory,magnitudeOfDelay,events{description,code,iconCategory},from,to,roadNumbers}}}", "language": "en-GB", "categoryFilter": "0,1,2,3,4,5,6,7,8,9,10,11,14"})
         response.raise_for_status()
         return response.json().get("incidents", [])

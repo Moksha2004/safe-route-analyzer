@@ -87,6 +87,25 @@ def test_routing_requests_include_departure_datetime():
     asyncio.run(run())
 
 
+def test_single_route_request_omits_alternative_type():
+    observed: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(200, json={"routes": [{"legs": []}]})
+
+    async def run():
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        tomtom = TomTomClient("test-key", client)
+        await tomtom.routes({"lat": 12.9, "lon": 77.6}, {"lat": 12.95, "lon": 77.65}, "car", 0)
+        await tomtom.routes({"lat": 12.9, "lon": 77.6}, {"lat": 12.95, "lon": 77.65}, "car", 2)
+        assert "alternativeType" not in observed[0].url.params
+        assert observed[1].url.params["alternativeType"] == "anyRoute"
+        await client.aclose()
+
+    asyncio.run(run())
+
+
 def test_along_route_activity_fetches_each_category_with_weekly_hours_and_timezone():
     observed: list[httpx.Request] = []
 

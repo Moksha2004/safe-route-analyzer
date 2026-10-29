@@ -4,20 +4,19 @@ from typing import Any
 
 from app.config import settings
 
-
-def minmax(values: list[float]) -> list[float]:
-    low = min(values, default=0.0)
-    high = max(values, default=0.0)
-    if high <= low:
-        return [0.0 for _ in values]
-    return [(value - low) / (high - low) for value in values]
+TIME_TOLERANCE = 0.10
 
 
 def rank_routes(routes: list[dict[str, Any]], is_night: bool, mode: str, multipliers: dict[str, float] | None = None) -> list[dict[str, Any]]:
     if not routes:
         return routes
-    duration = minmax([float(route["durationSeconds"]) for route in routes])
-    delay = minmax([float(route.get("trafficDelaySeconds", 0)) for route in routes])
+    durations = [float(route["durationSeconds"]) for route in routes]
+    delays = [float(route.get("trafficDelaySeconds", 0)) for route in routes]
+    # Time costs are relative to the fastest trip (min-max would turn a 1-minute gap into a maximal penalty),
+    # and trips within TIME_TOLERANCE of the fastest count as equally quick so activity decides between them.
+    fastest = max(min(durations), 60.0)
+    duration = [min(1.0, max(0.0, (value - min(durations)) / fastest - TIME_TOLERANCE)) for value in durations]
+    delay = [min(1.0, (value - min(delays)) / fastest) for value in delays]
     m = multipliers or {}
 
     def scaled(*factors: str) -> float:
