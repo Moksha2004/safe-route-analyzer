@@ -1,20 +1,38 @@
 # Safe Route Analyzer
 
-A low-scale, evidence-aware multi-route comparison demo for Bengaluru-style trips. TomTom supplies geocoding, route geometry, travel-time summaries, along-route places and incidents. OpenStreetMap street-lamp nodes provide a mapped-lighting signal. Optional Nebius Nemotron calls parse preferences and narrate route metrics; all provider failures should degrade gracefully.
+Built for the **Nebius x NVIDIA Global AI Hackathon** (Best Apps and Agents track).
+
+A low-scale, evidence-aware multi-route comparison demo for Bengaluru-style trips. TomTom supplies geocoding, route geometry, travel-time summaries, along-route places and incidents. OpenStreetMap street-lamp nodes provide a mapped-lighting signal. NVIDIA Nemotron models, served through **Nebius Token Factory**, parse free-text preferences into scoring weights and narrate the comparison between routes; all provider failures degrade gracefully (the app still returns routes and metrics if an LLM call fails or times out).
 
 **This is not crime data, a safety service, or a safety guarantee.** A mapped OpenStreetMap lamp does not confirm that it works, and missing lamp data does not establish darkness.
+
+## Nebius / NVIDIA usage
+
+- **Provider**: [Nebius Token Factory](https://tokenfactory.nebius.com) (OpenAI-compatible `chat/completions`), see [`app/clients/nebius.py`](app/clients/nebius.py).
+- **Intent parsing** — `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B` turns free-text preferences (e.g. "prefer open shops, hospitals, police and residential stretches") into bounded scoring weights. See [`app/agents/agent2a_intent.py`](app/agents/agent2a_intent.py). Called with a 200ms budget; falls back to mode defaults on timeout.
+- **Route explainer** — `nvidia/nemotron-3-super-120b-a12b` compares routes using only the structured metrics the backend already computed (never raw text), and is filtered for banned "guaranteed safe" phrasing. See [`app/agents/explainer.py`](app/agents/explainer.py).
+- The LLMs never choose geometry or touch TomTom/OSM data directly — they only parse intent and narrate numbers the deterministic scoring pipeline already produced.
 
 ## Requirements
 
 - Python 3.11+
 - Node.js 20+
-- TomTom API key for live routes; Nebius key is optional
+- TomTom API key for live routes; Nebius Token Factory API key for the AI-parsed preferences and route explanations (optional — the app still works without it, just without the LLM features)
 
 ## Configure and run
 
-Copy `.env.example` to `.env` and set `TOMTOM_API_KEY`. Keep `VITE_TOMTOM_API_KEY` equal to that key for the TomTom vector basemap. Without a basemap key, the frontend falls back to the public OpenFreeMap Liberty style. Typed place suggestions are also powered by TomTom and return exact coordinates for either field.
+Copy `.env.example` to `.env` and set `TOMTOM_API_KEY` and `NEBIUS_API_KEY`. Keep `VITE_TOMTOM_API_KEY` equal to `TOMTOM_API_KEY` for the TomTom vector basemap. Without a basemap key, the frontend falls back to the public OpenFreeMap Liberty style. Typed place suggestions are also powered by TomTom and return exact coordinates for either field.
 
-Backend, from the repository root:
+Backend, from the repository root (macOS/Linux):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+uvicorn app.main:app --reload
+```
+
+Windows (PowerShell):
 
 ```powershell
 py -m venv .venv
@@ -25,12 +43,16 @@ uvicorn app.main:app --reload
 
 Frontend, in `web/`:
 
-```powershell
+```bash
 npm install
 npm run dev
 ```
 
-The Vite dev server proxies `/api` to `http://127.0.0.1:8000`. To serve a production build through FastAPI, run `npm run build` in `web/`, then start the backend.
+The Vite dev server proxies `/api` to `http://127.0.0.1:8000`. To serve a production build through FastAPI, run `npm run build` in `web/`, then start the backend — it automatically mounts `web/dist` at `/` when present.
+
+## Deploying
+
+A multi-stage `Dockerfile` builds the frontend and serves it from FastAPI in one container; `render.yaml` describes it as a [Render](https://render.com) Blueprint. To deploy on Render: connect this repo as a new Blueprint, and set `TOMTOM_API_KEY`, `NEBIUS_API_KEY`, and `VITE_TOMTOM_API_KEY` (same value as `TOMTOM_API_KEY`) as secret environment variables in the dashboard — everything else has a sane default in `render.yaml`. Any other Docker-capable host works the same way: `docker build --build-arg VITE_TOMTOM_API_KEY=... -t safe-route-analyzer . && docker run -p 8000:8000 --env-file .env safe-route-analyzer`.
 
 ## Route and search settings
 
