@@ -19,7 +19,7 @@ export type RouteResult = {
   navigationSteps: { instruction?: string; message?: string; routeOffsetInMeters?: number; point?: { latitude?: number; longitude?: number } }[];
   preferenceScore: number;
   preferenceMatches: string[];
-  nightActivityBreakdown: { components: Record<string, number>; missingSignals: string[] };
+  nightActivityBreakdown: { components: Record<string, number>; missingSignals: string[]; evidenceCoverage?: number };
   activitySummary: Record<string, Record<string, number>>;
   policeCount: number;
   residentialCoveragePercent: number;
@@ -27,9 +27,16 @@ export type RouteResult = {
   missingSignals: string[];
 };
 
+export type ParsedPreferences = {
+  model?: string;
+  multipliers?: Record<string, number>;
+  priorities?: string[];
+  source?: string;
+};
+
 export type AnalyzeResponse = {
   routes: RouteResult[];
-  parsedPreferences: Record<string, unknown>;
+  parsedPreferences: ParsedPreferences;
   safetyClaims: false;
   limitations: string[];
 };

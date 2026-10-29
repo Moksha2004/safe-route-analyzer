@@ -13,18 +13,26 @@ def minmax(values: list[float]) -> list[float]:
     return [(value - low) / (high - low) for value in values]
 
 
-def rank_routes(routes: list[dict[str, Any]], is_night: bool, mode: str, preferences: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+def rank_routes(routes: list[dict[str, Any]], is_night: bool, mode: str, multipliers: dict[str, float] | None = None) -> list[dict[str, Any]]:
     if not routes:
         return routes
     duration = minmax([float(route["durationSeconds"]) for route in routes])
     delay = minmax([float(route.get("trafficDelaySeconds", 0)) for route in routes])
-    night_weights = {"car": (0.45, 0.15, 0.2, 0.2), "pedestrian": (0.55, 0.15, 0.15, 0.15), "bicycle": (0.5, 0.18, 0.16, 0.16)}[mode]
+    m = multipliers or {}
+
+    def scaled(*factors: str) -> float:
+        return sum(m.get(factor, 1.0) for factor in factors) / len(factors)
+
+    base_night = {"car": (0.45, 0.15, 0.2, 0.2), "pedestrian": (0.55, 0.15, 0.15, 0.15), "bicycle": (0.5, 0.18, 0.16, 0.16)}[mode]
+    # At night lighting, police and residential feed the ranking only through NAS, so their multipliers scale the NAS term.
+    night_weights = (
+        base_night[0] * scaled("nas", "light", "police", "residential"),
+        base_night[1] * scaled("shop", "hospital"),
+        base_night[2] * scaled("closure"),
+        base_night[3] * scaled("duration"),
+    )
     day_weights = {"nas": 0.09, "light": 0.20, "hospital": 0.17, "shop": 0.13, "police": 0.22, "residential": 0.12, "delay": 0.04, "closure": 0.02, "duration": 0.01}
-    if preferences:
-        for name in day_weights:
-            value = preferences.get(name)
-            if isinstance(value, (int, float)) and not isinstance(value, bool):
-                day_weights[name] = float(value)
+    day_weights = {name: weight * m.get(name, 1.0) for name, weight in day_weights.items()}
     for index, route in enumerate(routes):
         nas = float(route["nightActivityScore"]) / 100
         lighting = float(route["streetLightingScore"]) / 100

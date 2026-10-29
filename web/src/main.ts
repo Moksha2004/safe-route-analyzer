@@ -1,7 +1,7 @@
 import { Map as MapLibreMap, Marker, NavigationControl } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
-import { analyze, type RouteResult } from './api/analyze';
+import { analyze, type ParsedPreferences, type RouteResult } from './api/analyze';
 import { searchPlaces, type PlaceSuggestion } from './api/places';
 import { DEFAULT_MAX_ROUTES, MAX_ROUTES, MIN_SEARCH_LENGTH, SEARCH_DEBOUNCE_MS } from './config';
 import { createMap } from './map/createMap';
@@ -48,6 +48,7 @@ const panel = document.querySelector<HTMLElement>('#results-panel')!;
 const button = document.querySelector<HTMLButtonElement>('#submit-button')!;
 const status = document.querySelector<HTMLElement>('#map-error')!;
 let activeRoutes: RouteResult[] = [];
+let activeParsed: ParsedPreferences = {};
 let selectedIndex = 0;
 let lampsVisible = false;
 let pinMode = false;
@@ -261,9 +262,10 @@ form.addEventListener('submit', async (event) => {
       explain: true,
     });
     activeRoutes = result.routes;
+    activeParsed = result.parsedPreferences ?? {};
     selectedIndex = 0;
     if (!activeRoutes.length) throw new Error('No routes were returned. Try another destination.');
-    renderResults(activeRoutes, result.limitations);
+    renderResults(activeRoutes, result.limitations, result.parsedPreferences);
     drawRoutes(map, activeRoutes, selectedIndex);
   } catch (error) {
     status.textContent = error instanceof Error ? error.message : 'Unable to analyze this journey.';
@@ -273,7 +275,26 @@ form.addEventListener('submit', async (event) => {
   }
 });
 
-function renderResults(routes: RouteResult[], limitations: string[]): void {
+const FACTOR_LABELS: Record<string, string> = {
+  nas: 'Night activity',
+  light: 'Street lighting',
+  police: 'Police',
+  hospital: 'Open hospitals',
+  shop: 'Open shops',
+  residential: 'Residential',
+  delay: 'Less traffic',
+  closure: 'Avoid closures',
+  duration: 'Shorter trip',
+};
+
+function renderParsedPreferences(parsed: ParsedPreferences): string {
+  const adjusted = Object.entries(parsed.multipliers ?? {}).filter(([, value]) => value !== 1).sort(([, a], [, b]) => b - a);
+  if (parsed.source !== 'nebius' || !adjusted.length) return '';
+  const chips = adjusted.map(([key, value]) => `<span>${value > 1 ? '▲' : '▼'} ${escapeHtml(FACTOR_LABELS[key] ?? key)} ×${value.toFixed(2)}</span>`).join('');
+  return `<div class="preference-matches ai-preferences"><span>NEMOTRON NANO READ YOUR PREFERENCES AS</span><div class="signal-chips">${chips}</div></div>`;
+}
+
+function renderResults(routes: RouteResult[], limitations: string[], parsed: ParsedPreferences): void {
   const cards = routes.map((route, index) => {
     const components = route.nightActivityBreakdown.components ?? {};
     const missing = new Set([...route.missingSignals, ...(route.nightActivityBreakdown.missingSignals ?? [])]);
@@ -284,21 +305,21 @@ function renderResults(routes: RouteResult[], limitations: string[]): void {
     const active = index === selectedIndex;
     return `<button class="route-card ${active ? 'selected' : ''}" data-route-index="${index}" type="button">
       <div class="route-card-top"><span class="route-rank">0${route.rank}</span><span class="route-label">${route.rank === 1 ? 'BEST MATCH' : `ALTERNATIVE ${route.rank - 1}`}</span><span class="route-arrow">↗</span></div>
-      <div class="score-row"><div><strong class="score-number">${hasNasEvidence ? score : '—'}</strong><span class="score-outof">${hasNasEvidence ? ' / 100' : ''}</span><div class="score-caption">${hasNasEvidence ? 'Night activity score' : 'Not enough mapped activity data'}</div></div><div class="score-ring" style="--score:${hasNasEvidence ? score * 3.6 : 0}deg"><span>${hasNasEvidence ? score : '—'}</span></div></div>
+      <div class="score-row"><div><strong class="score-number">${hasNasEvidence ? score : '—'}</strong><span class="score-outof">${hasNasEvidence ? ' / 100' : ''}</span><div class="score-caption">${hasNasEvidence ? `Night activity score · ${Math.round(route.nightActivityBreakdown.evidenceCoverage ?? 0)}% of signals known` : 'Not enough mapped activity data'}</div></div><div class="score-ring" style="--score:${hasNasEvidence ? score * 3.6 : 0}deg"><span>${hasNasEvidence ? score : '—'}</span></div></div>
       <div class="metrics"><div class="metric"><span class="metric-icon">✦</span><span><strong>${formatSignal('streetLighting', String(lightScore))}<small>${missing.has('streetLighting') ? '' : '/100'}</small></strong><em>Mapped lighting</em></span></div><div class="metric"><span class="metric-icon">◷</span><span><strong>${formatDuration(route.durationSeconds)}</strong><em>Est. time · ${formatTime(route.estimatedArrivalTime)}</em></span></div><div class="metric"><span class="metric-icon">⌁</span><span><strong>${(route.distanceMeters / 1000).toFixed(1)}<small> km</small></strong><em>${formatSignal('traffic', `Delay ${formatDuration(route.trafficDelaySeconds)}`)}</em></span></div></div>
       <div class="breakdown"><span>ACTIVITY SIGNALS</span><div class="signal-chips"><span>Police ${formatSignal('police', String(Math.round(components.policePresence ?? route.policeCount * 50)))}</span><span>Shops ${missing.has('shops') ? '—' : `${route.activitySummary.shops?.open ?? 0} open${route.activitySummary.shops?.unknown ? ` · ${route.activitySummary.shops.unknown} unknown` : ''}`}</span><span>Hospitals ${missing.has('hospitals') ? '—' : `${route.activitySummary.hospitals?.open ?? 0} open${route.activitySummary.hospitals?.unknown ? ` · ${route.activitySummary.hospitals.unknown} unknown` : ''}`}</span><span>Homes ${formatSignal('residential', `${Math.round(route.residentialCoveragePercent)}%`)}</span></div></div>
       ${route.preferenceMatches.length ? `<div class="preference-matches"><span>YOUR PREFERENCES</span><div class="signal-chips">${route.preferenceMatches.map((match) => `<span>✓ ${escapeHtml(match)}</span>`).join('')}</div></div>` : ''}
-      ${route.explanation ? `<p class="route-explanation">${escapeHtml(route.explanation)}</p>` : ''}
+      ${route.explanation ? `<p class="route-explanation"><span class="ai-label">NEMOTRON SUPER</span>${escapeHtml(route.explanation)}</p>` : ''}
       ${route.missingSignals.length ? `<p class="missing-note">Limited data: ${escapeHtml(route.missingSignals.join(', '))}</p>` : ''}
     </button>`;
   }).join('');
   const selectedRoute = routes[selectedIndex];
   const navigating = navigationWatchId !== null;
-  panel.innerHTML = `<div class="results-header"><div><span class="eyebrow">YOUR ROUTES</span><h2>${routes.length} options to compare</h2></div><span class="sort-label">RANKED BY ACTIVITY</span></div><div class="route-list">${cards}</div><section class="navigation-card"><div class="navigation-heading"><span class="navigation-icon">➤</span><span><strong>${navigating ? 'Navigation active' : `Navigate Route ${selectedRoute.rank}`}</strong><small id="navigation-status">${navigating ? 'Waiting for GPS…' : 'Follow the selected route with live location.'}</small></span></div><div class="navigation-progress"><span>REMAINING</span><strong id="navigation-distance">—</strong></div><button class="navigation-button ${navigating ? 'navigating' : ''}" id="navigation-button" type="button">${navigating ? 'Stop navigation' : 'Start navigation'}</button></section><div class="data-note"><span>ⓘ</span><p>${escapeHtml(limitations[1] ?? 'Scores describe mapped activity signals—not safety.')}</p></div>`;
+  panel.innerHTML = `<div class="results-header"><div><span class="eyebrow">YOUR ROUTES</span><h2>${routes.length} options to compare</h2></div><span class="sort-label">RANKED BY ACTIVITY</span></div>${renderParsedPreferences(parsed)}<div class="route-list">${cards}</div><section class="navigation-card"><div class="navigation-heading"><span class="navigation-icon">➤</span><span><strong>${navigating ? 'Navigation active' : `Navigate Route ${selectedRoute.rank}`}</strong><small id="navigation-status">${navigating ? 'Waiting for GPS…' : 'Follow the selected route with live location.'}</small></span></div><div class="navigation-progress"><span>REMAINING</span><strong id="navigation-distance">—</strong></div><button class="navigation-button ${navigating ? 'navigating' : ''}" id="navigation-button" type="button">${navigating ? 'Stop navigation' : 'Start navigation'}</button></section><div class="data-note"><span>ⓘ</span><p>${escapeHtml(limitations[1] ?? 'Scores describe mapped activity signals—not safety.')}</p></div>`;
   panel.querySelectorAll<HTMLButtonElement>('[data-route-index]').forEach((card) => card.addEventListener('click', () => {
     if (navigationWatchId !== null) stopNavigation();
     selectedIndex = Number(card.dataset.routeIndex ?? 0);
-    renderResults(routes, limitations);
+    renderResults(routes, limitations, parsed);
     drawRoutes(map, routes, selectedIndex);
   }));
   panel.querySelector<HTMLButtonElement>('#navigation-button')?.addEventListener('click', () => {
@@ -325,7 +346,7 @@ function startNavigation(): void {
     status.textContent = error.code === error.PERMISSION_DENIED
       ? 'Location permission denied. Enable it in browser settings to navigate live.'
       : 'Could not get a live GPS location. Check your signal and try again.';
-    renderResults(activeRoutes, []);
+    renderResults(activeRoutes, [], activeParsed);
   }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 });
 }
 
@@ -364,7 +385,7 @@ function stopNavigation(): void {
   navigationMarker?.remove();
   navigationMarker = null;
   clearRemainingRoute(map);
-  if (activeRoutes.length) renderResults(activeRoutes, []);
+  if (activeRoutes.length) renderResults(activeRoutes, [], activeParsed);
 }
 
 function formatDuration(seconds: number): string {

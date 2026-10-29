@@ -9,6 +9,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 
+from app.agents.agent2a_intent import defaults as intent_defaults
+from app.agents.agent2a_intent import parse_preferences
+from app.agents.explainer import explain_routes
 from app.clients.nebius import NebiusClient
 from app.clients.overpass import OverpassClient
 from app.clients.tomtom import TomTomClient
@@ -151,13 +154,24 @@ def _near_route(point: dict[str, Any], samples: list[list[float]], corridor_m: f
     for coordinate in coordinates:
         if not isinstance(coordinate, (list, tuple)) or len(coordinate) < 2 or coordinate[0] is None or coordinate[1] is None:
             continue
-        lon, lat = float(coordinate[0]), float(coordinate[1])
-        for route_lon, route_lat in samples:
-            dx = (lon - route_lon) * 111_320 * math.cos(math.radians(route_lat))
-            dy = (lat - route_lat) * 111_320
-            if math.hypot(dx, dy) <= corridor_m:
-                return True
+        if _distance_to_polyline_m(float(coordinate[0]), float(coordinate[1]), samples) <= corridor_m:
+            return True
     return False
+
+
+def _distance_to_polyline_m(lon: float, lat: float, samples: list[list[float]]) -> float:
+    # Distance to segments, not just vertices: samples are ~350 m apart while corridors are 40-100 m wide.
+    x_scale = 111_320 * math.cos(math.radians(lat))
+    relative = [((route_lon - lon) * x_scale, (route_lat - lat) * 111_320) for route_lon, route_lat in samples]
+    if len(relative) == 1:
+        return math.hypot(*relative[0])
+    best = float("inf")
+    for (ax, ay), (bx, by) in zip(relative, relative[1:]):
+        dx, dy = bx - ax, by - ay
+        length_squared = dx * dx + dy * dy
+        t = 0.0 if length_squared == 0 else min(1.0, max(0.0, -(ax * dx + ay * dy) / length_squared))
+        best = min(best, math.hypot(ax + t * dx, ay + t * dy))
+    return best
 
 
 def _category(poi: dict[str, Any]) -> str:
@@ -205,37 +219,45 @@ class RouteEngine:
     async def analyze(self, request: AnalyzeRequest) -> dict[str, Any]:
         if not self.tomtom:
             raise RuntimeError("TOMTOM_API_KEY is required to analyze routes")
-        start, destination = _position(request.start), _position(request.destination)
-        if start is None:
-            start = await self.tomtom.geocode(str(request.start))
-        if destination is None:
-            destination = await self.tomtom.geocode(str(request.destination))
-        departure = _time_for_request(request.departureTime, request.timezone)
-        raw_routes = await self.tomtom.routes(
-            start,
-            destination,
-            {"car": "car", "pedestrian": "pedestrian", "bicycle": "bicycle"}[request.mode],
-            request.maxRoutes - 1,
-            departure=departure,
-        )
-        if not raw_routes:
-            raise ValueError("TomTom returned no routes")
-        unique_routes: list[dict[str, Any]] = []
-        route_signatures: set[tuple[tuple[float, float], ...]] = set()
-        for raw in raw_routes:
-            shape = _route_shape(raw)
-            signature = _route_signature(shape)
-            if len(shape) >= 2 and signature not in route_signatures:
-                unique_routes.append(raw)
-                route_signatures.add(signature)
-        raw_routes = unique_routes
-        if not raw_routes:
-            raise ValueError("TomTom returned no unique routes with valid geometry")
-        route_parts = [_route_shape(item) for item in raw_routes]
-        if any(len(points) < 2 for points in route_parts):
-            raise ValueError("TomTom route is missing valid geometry")
+        # Overlaps geocoding/routing. The LLM only rescales ranking weights and names landmarks; it never touches geometry.
+        intent_task = asyncio.create_task(parse_preferences(self.nebius, request.preferences)) if self.nebius and request.preferences else None
+        try:
+            start, destination = _position(request.start), _position(request.destination)
+            if start is None:
+                start = await self.tomtom.geocode(str(request.start))
+            if destination is None:
+                destination = await self.tomtom.geocode(str(request.destination))
+            departure = _time_for_request(request.departureTime, request.timezone)
+            raw_routes = await self.tomtom.routes(
+                start,
+                destination,
+                {"car": "car", "pedestrian": "pedestrian", "bicycle": "bicycle"}[request.mode],
+                request.maxRoutes - 1,
+                departure=departure,
+            )
+            if not raw_routes:
+                raise ValueError("TomTom returned no routes")
+            unique_routes: list[dict[str, Any]] = []
+            route_signatures: set[tuple[tuple[float, float], ...]] = set()
+            for raw in raw_routes:
+                shape = _route_shape(raw)
+                signature = _route_signature(shape)
+                if len(shape) >= 2 and signature not in route_signatures:
+                    unique_routes.append(raw)
+                    route_signatures.add(signature)
+            raw_routes = unique_routes
+            if not raw_routes:
+                raise ValueError("TomTom returned no unique routes with valid geometry")
+            route_parts = [_route_shape(item) for item in raw_routes]
+            if any(len(points) < 2 for points in route_parts):
+                raise ValueError("TomTom route is missing valid geometry")
+        except BaseException:
+            if intent_task:
+                intent_task.cancel()
+            raise
+        parsed = await intent_task if intent_task else intent_defaults()
         night = is_night_hour(departure.hour)
-        preference_terms = _preference_terms(request.preferences)
+        preference_terms = parsed["landmarks"] if parsed["source"] == "nebius" else _preference_terms(request.preferences)
 
         async def load_route_pois(points: list[list[float]]) -> list[dict[str, Any]]:
             async with self._semaphore:
@@ -353,28 +375,35 @@ class RouteEngine:
             except (httpx.HTTPError, TimeoutError):
                 return [{"_safeRouteSearchError": "poiSearch"}]
 
-        poi_responses = await asyncio.gather(*(load_route_pois_with_fallback(points) for points in route_parts))
+        bbox = _bbox([point for shape in route_parts for point in shape])
+
+        async def load_incidents() -> list[dict[str, Any]]:
+            try:
+                return await self.tomtom.incidents(bbox)
+            except (httpx.HTTPError, TimeoutError):
+                return []
+
+        async def load_lamps() -> list[dict[str, Any]] | None:
+            if not self.overpass:
+                return None
+            try:
+                return await self.overpass.street_lamps(bbox)
+            except (httpx.HTTPError, TimeoutError, ValueError):
+                return None
+
+        *poi_responses, incidents, loaded_lamps = await asyncio.gather(
+            *(load_route_pois_with_fallback(points) for points in route_parts),
+            load_incidents(),
+            load_lamps(),
+        )
         poi_search_missing = any(
             any(item.get("_safeRouteSearchError") == "poiSearch" for item in response)
             for response in poi_responses
             if isinstance(response, list)
         )
         poi_responses = [response if isinstance(response, list) else [{"_safeRouteSearchError": "poiSearch"}] for response in poi_responses]
-        bbox = _bbox([point for shape in route_parts for point in shape])
-        incidents: list[dict[str, Any]] = []
-        try:
-            incidents = await self.tomtom.incidents(bbox)
-        except (httpx.HTTPError, TimeoutError):
-            pass
-        lamps: list[dict[str, Any]] = []
-        lighting_missing = False
-        if self.overpass:
-            try:
-                lamps = await self.overpass.street_lamps(bbox)
-            except (httpx.HTTPError, TimeoutError):
-                lighting_missing = True
-        else:
-            lighting_missing = True
+        lighting_missing = loaded_lamps is None
+        lamps: list[dict[str, Any]] = loaded_lamps or []
         preliminary: list[dict[str, Any]] = []
         counts: list[int] = []
         lengths: list[int] = []
@@ -490,20 +519,11 @@ class RouteEngine:
             breakdown["missingSignals"] = sorted(set(breakdown["missingSignals"] + route["missingSignals"]))
             route["nightActivityBreakdown"] = breakdown
             del route["_components"]
-        parsed = {"weights": {}, "priorities": [], "source": "defaults"}
-        # Intent parsing is optional and fails open; kept off the geometry/scoring data path.
-        if self.nebius and request.preferences:
-            try:
-                from app.agents.agent2a_intent import parse_preferences
-                parsed = await asyncio.wait_for(parse_preferences(self.nebius, request.preferences, request.mode), timeout=0.2)
-            except (TimeoutError, Exception):
-                pass
-        rank_routes(preliminary, night, request.mode, parsed.get("weights") if parsed.get("source") == "nebius" else None)
+        rank_routes(preliminary, night, request.mode, parsed["multipliers"] or None)
         preliminary = preliminary[:request.maxRoutes]
         explanations: list[str | None] = [None] * len(preliminary)
         if self.explain_enabled and request.explain and self.nebius:
-            from app.agents.explainer import explain_routes
-            explanations = await explain_routes(self.nebius, preliminary)
+            explanations = await explain_routes(self.nebius, preliminary, parsed["priorities"])
         for route, explanation in zip(preliminary, explanations, strict=True):
             route["explanation"] = explanation
             route.pop("severeIncidentCount", None)
@@ -514,4 +534,6 @@ class RouteEngine:
             limitations.append("Requested landmark matches come from TomTom search results near each route; search coverage may be incomplete, and the route engine may not provide every possible detour alternative.")
         if not has_route_lighting:
             limitations.append("OpenStreetMap returned no mapped street lamps for this request or was unavailable; this is not evidence that routes are unlit.")
+        elif self.overpass and self.overpass.snapshot_covers(bbox) and (note := self.overpass.snapshot_note()):
+            limitations.append(note)
         return {"routes": preliminary, "parsedPreferences": parsed, "safetyClaims": False, "limitations": limitations, "dataLimitations": limitations}

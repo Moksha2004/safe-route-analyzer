@@ -38,19 +38,37 @@ def _distance_meters(origin: dict[str, float] | None, position: dict[str, Any]) 
 
 class TomTomClient:
     BASE_URL = "https://api.tomtom.com"
+    # TomTom's Search API answers bursts above ~5 requests/second with HTTP 429.
+    SEARCH_MIN_INTERVAL_SECONDS = 0.25
+    SEARCH_RETRIES = 3
 
     def __init__(self, api_key: str, client: httpx.AsyncClient | None = None) -> None:
         self.api_key = api_key
         self.client = client or httpx.AsyncClient(timeout=12.0)
         self._owns_client = client is None
-        self._search_semaphore = asyncio.Semaphore(4)
+        self._search_lock = asyncio.Lock()
+        self._next_search_at = 0.0
 
     async def close(self) -> None:
         if self._owns_client:
             await self.client.aclose()
 
+    async def _search(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        loop = asyncio.get_running_loop()
+        for attempt in range(self.SEARCH_RETRIES + 1):
+            async with self._search_lock:
+                wait = self._next_search_at - loop.time()
+                if wait > 0:
+                    await asyncio.sleep(wait)
+                self._next_search_at = loop.time() + self.SEARCH_MIN_INTERVAL_SECONDS
+            response = await self.client.request(method, url, **kwargs)
+            if response.status_code != 429 or attempt == self.SEARCH_RETRIES:
+                return response
+            await asyncio.sleep(0.5 * 2 ** attempt)
+        return response
+
     async def geocode(self, place: str) -> dict[str, float]:
-        response = await self.client.get(f"{self.BASE_URL}/search/2/geocode/{quote(place, safe='')}.json", params={"key": self.api_key, "limit": 1})
+        response = await self._search("GET", f"{self.BASE_URL}/search/2/geocode/{quote(place, safe='')}.json", params={"key": self.api_key, "limit": 1})
         response.raise_for_status()
         results = response.json().get("results", [])
         if not results:
@@ -79,7 +97,8 @@ class TomTomClient:
             # Bias toward nearby results without a hard radius filter; a strict
             # radius can hide useful matches when the typed place is misspelled.
             params["geobias"] = f"point:{near['lat']},{near['lon']}"
-        response = await self.client.get(
+        response = await self._search(
+            "GET",
             f"{self.BASE_URL}/search/2/search/{quote(query, safe='')}.json",
             params=params,
         )
@@ -187,12 +206,12 @@ class TomTomClient:
 
         async def search(query: str, category: str) -> list[dict[str, Any]]:
             try:
-                async with self._search_semaphore:
-                    response = await self.client.post(
-                        f"{self.BASE_URL}/search/2/searchAlongRoute/{quote(query, safe='')}.json",
-                        params={"key": self.api_key, "limit": 20, "maxDetourTime": 600, "openingHours": "nextSevenDays", "timeZone": "iana", "spreadingMode": "plan"},
-                        json=route,
-                    )
+                response = await self._search(
+                    "POST",
+                    f"{self.BASE_URL}/search/2/searchAlongRoute/{quote(query, safe='')}.json",
+                    params={"key": self.api_key, "limit": 20, "maxDetourTime": 600, "openingHours": "nextSevenDays", "timeZone": "iana", "spreadingMode": "plan"},
+                    json=route,
+                )
                 response.raise_for_status()
                 fetched_at = datetime.now(timezone.utc).isoformat()
                 return [{**item, "_safeRouteCategory": category, "_safeRouteOpeningHoursFetchedAt": fetched_at} for item in response.json().get("results", [])]
@@ -226,7 +245,8 @@ class TomTomClient:
             "minFuzzyLevel": 1,
             "maxFuzzyLevel": 4,
         }
-        response = await self.client.get(
+        response = await self._search(
+            "GET",
             f"{self.BASE_URL}/search/2/search/{quote(query, safe='')}.json",
             params=params,
         )
@@ -237,7 +257,8 @@ class TomTomClient:
         if not points or not query.strip():
             return []
         route = {"route": {"points": [{"lat": lat, "lon": lon} for lon, lat in points]}}
-        response = await self.client.post(
+        response = await self._search(
+            "POST",
             f"{self.BASE_URL}/search/2/searchAlongRoute/{quote(query.strip(), safe='')}.json",
             params={"key": self.api_key, "limit": 20, "maxDetourTime": 1800, "openingHours": "nextSevenDays", "spreadingMode": "plan"},
             json=route,

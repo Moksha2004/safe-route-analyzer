@@ -13,11 +13,18 @@ def test_empty_lighting_is_zero():
     assert normalize_lamp_density([0, 0], [1000, 2000]) == [(0.0, 0.0), (0.0, 0.0)]
 
 
-def test_night_score_includes_lighting_and_reweights_missing_signals():
+def test_night_score_includes_lighting_and_treats_missing_signals_as_neutral():
     score, breakdown = score_night_activity({"streetLighting": 100, "policePresence": 50})
-    assert score == 75.0
+    assert score == 61.0
     assert breakdown["components"]["streetLighting"] == 100
+    assert breakdown["evidenceCoverage"] == 44.0
     assert "nightTrafficActivity" in breakdown["missingSignals"]
+
+
+def test_single_strong_signal_cannot_produce_a_perfect_score():
+    score, breakdown = score_night_activity({"policePresence": 100})
+    assert score == 61.0
+    assert breakdown["evidenceCoverage"] == 22.0
 
 
 def test_night_window_crosses_midnight():

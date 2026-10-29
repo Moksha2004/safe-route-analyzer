@@ -9,6 +9,6 @@ def test_contract_disallows_safety_claims_and_requires_limitations():
     assert response.limitations
 
 
-def test_default_route_count_is_five():
+def test_default_route_count_is_three():
     request = AnalyzeRequest(start="Bellandur", destination="Marathahalli")
-    assert request.maxRoutes == 5
+    assert request.maxRoutes == 3
