@@ -1,5 +1,6 @@
 import { LngLatBounds, type Map, type GeoJSONSource } from 'maplibre-gl';
 import type { RouteResult } from '../api/analyze';
+import { isPhoneLayout } from './createMap';
 
 const colors = ['#087f72', '#d79536', '#477aa5', '#a86545', '#738657'];
 
@@ -92,7 +93,9 @@ function fitRoute(map: Map, route: RouteResult): void {
   if (!route?.geometry.coordinates.length) return;
   const coordinates = route.geometry.coordinates;
   const bounds = coordinates.reduce((result, coordinate) => result.extend(coordinate), new LngLatBounds(coordinates[0], coordinates[0]));
-  map.fitBounds(bounds, { padding: { top: 56, bottom: 56, left: 56, right: 440 }, maxZoom: 15, duration: 700 });
+  // On wider screens the results panel covers the right of the map; on phones it sits below the map instead.
+  const padding = isPhoneLayout() ? 36 : { top: 56, bottom: 56, left: 56, right: 440 };
+  map.fitBounds(bounds, { padding, maxZoom: 15, duration: 700 });
 }
 
 export function toggleLamps(map: Map, visible: boolean): void {

@@ -4,7 +4,7 @@ import './style.css';
 import { analyze, type ParsedPreferences, type RouteResult } from './api/analyze';
 import { searchPlaces, type PlaceSuggestion } from './api/places';
 import { DEFAULT_MAX_ROUTES, MAX_ROUTES, MIN_SEARCH_LENGTH, SEARCH_DEBOUNCE_MS } from './config';
-import { createMap, whenMapReady } from './map/createMap';
+import { createMap, isPhoneLayout, whenMapReady } from './map/createMap';
 import { clearRemainingRoute, drawRoutes, showRemainingRoute, toggleLamps } from './map/layers';
 
 const root = document.querySelector<HTMLDivElement>('#app');
@@ -58,6 +58,11 @@ function showRoutesOnMap(routes: RouteResult[], selected: number): void {
     toggleLamps(map, lampsVisible);
   });
 }
+
+// On phones the map is below the form, so bring it into view when it changes.
+function scrollMapIntoView(): void {
+  if (isPhoneLayout()) document.querySelector('#map')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
 let pinMode = false;
 let pinTarget: 'start' | 'destination' | null = null;
 let startPin: { lat: number; lon: number } | null = null;
@@ -85,11 +90,12 @@ function selectMapTarget(target: 'start' | 'destination'): void {
   document.querySelector<HTMLElement>('#map-pick-message')!.textContent = `Click the map to set your ${target === 'start' ? 'starting point' : 'destination'}.`;
   document.querySelector<HTMLElement>('#map-pick-banner')?.classList.add('visible');
   status.textContent = '';
+  // The phone layout hides the form and enlarges the map while picking.
+  map.resize();
+  scrollMapIntoView();
 }
 
-document.querySelector('#pick-start')?.addEventListener('click', () => selectMapTarget('start'));
-document.querySelector('#pick-destination')?.addEventListener('click', () => selectMapTarget('destination'));
-document.querySelector('#cancel-pick')?.addEventListener('click', () => {
+function endMapPick(): void {
   pinMode = false;
   pinTarget = null;
   document.querySelector('#pick-start')?.classList.remove('is-active');
@@ -97,7 +103,13 @@ document.querySelector('#cancel-pick')?.addEventListener('click', () => {
   document.querySelector('#map')?.classList.remove('is-picking-location');
   document.querySelector('.map-stage')?.classList.remove('is-picking-location');
   document.querySelector('#map-pick-banner')?.classList.remove('visible');
-});
+  map.resize();
+  if (isPhoneLayout()) form.scrollIntoView({ block: 'start' });
+}
+
+document.querySelector('#pick-start')?.addEventListener('click', () => selectMapTarget('start'));
+document.querySelector('#pick-destination')?.addEventListener('click', () => selectMapTarget('destination'));
+document.querySelector('#cancel-pick')?.addEventListener('click', endMapPick);
 
 document.querySelector('#locate-button')?.addEventListener('click', () => {
   if (!navigator.geolocation) {
@@ -136,13 +148,7 @@ map.on('click', (event) => {
     document.querySelector<HTMLInputElement>('#destination')!.value = `${point.lat}, ${point.lon}`;
     status.textContent = 'Destination set from map.';
   }
-  pinMode = false;
-  pinTarget = null;
-  document.querySelector('#pick-start')?.classList.remove('is-active');
-  document.querySelector('#pick-destination')?.classList.remove('is-active');
-  document.querySelector('#map')?.classList.remove('is-picking-location');
-  document.querySelector('.map-stage')?.classList.remove('is-picking-location');
-  document.querySelector('#map-pick-banner')?.classList.remove('visible');
+  endMapPick();
   updatePinMarkers();
   hideSuggestions(selectedTarget);
 });
@@ -274,6 +280,7 @@ form.addEventListener('submit', async (event) => {
     if (!activeRoutes.length) throw new Error('No routes were returned. Try another destination.');
     renderResults(activeRoutes, result.limitations, result.parsedPreferences);
     showRoutesOnMap(activeRoutes, selectedIndex);
+    scrollMapIntoView();
   } catch (error) {
     status.textContent = error instanceof Error ? error.message : 'Unable to analyze this journey.';
   } finally {
@@ -344,6 +351,7 @@ function renderResults(routes: RouteResult[], limitations: string[], parsed: Par
     selectedIndex = Number(card.dataset.routeIndex ?? 0);
     renderResults(routes, limitations, parsed);
     showRoutesOnMap(routes, selectedIndex);
+    scrollMapIntoView();
   }));
   panel.querySelector<HTMLButtonElement>('#navigation-button')?.addEventListener('click', () => {
     if (navigationWatchId !== null) stopNavigation();

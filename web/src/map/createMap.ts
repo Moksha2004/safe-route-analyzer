@@ -7,6 +7,12 @@ setWorkerUrl(maplibreWorkerUrl);
 const TOMTOM_STYLE = 'https://api.tomtom.com/style/1/style/25.2.3-*?map=basic_main&key=';
 const FALLBACK_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
 const readyMaps = new WeakSet<Map>();
+// Same breakpoint as the phone layout in style.css, where the map sits between the form and the results.
+const PHONE_LAYOUT = window.matchMedia('(max-width: 680px)');
+
+export function isPhoneLayout(): boolean {
+  return PHONE_LAYOUT.matches;
+}
 
 export function createMap(container: HTMLElement): Map {
   const key = import.meta.env.VITE_TOMTOM_API_KEY as string | undefined;
