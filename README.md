@@ -27,6 +27,8 @@ one grounded explanation per route, citing only the metrics above
 - **Intent agent** — `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B` ([`app/agents/agent2a_intent.py`](app/agents/agent2a_intent.py)) maps free text to 0.5–1.5× multipliers on nine named ranking factors (police, lighting, open shops, hospitals, residential, night activity, delay, closures, duration) plus up to three landmark search terms. Output is validated and clamped server-side; unknown factors are dropped. Falls back to default weights and keyword extraction if the call fails.
 - **Route explainer** — `nvidia/nemotron-3-super-120b-a12b` ([`app/agents/explainer.py`](app/agents/explainer.py)) receives only the structured metrics the backend computed plus the parsed priorities, writes one explanation per route, and is post-filtered for "guaranteed safe"-style phrasing.
 - The LLMs never choose geometry or touch TomTom/OSM data directly; the UI labels which model produced what.
+- **Where Token Factory sped up the build** — no GPUs to provision and no model hosting. One API key and one OpenAI-compatible endpoint serve both Nemotron sizes, so the whole Nebius client is ~40 lines of `httpx` with no SDK. Comparing Nano and Super on the same prompt was a one-string change, which is how we sized each model to its task and found the reasoning switch above.
+- **Other Nebius services** — none. The app runs in a Docker container on Render and calls Token Factory over HTTPS; the API key is a server-side environment variable.
 
 ## Requirements
 
